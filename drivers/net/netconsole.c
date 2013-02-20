@@ -886,7 +886,7 @@ static struct console netconsole_ext = {
 
 static struct console netconsole = {
 	.name	= "netcon",
-	.flags	= CON_ENABLED,
+	.flags	= CON_ENABLED | CON_ALLDATA,
 	.write	= write_msg,
 };
 
