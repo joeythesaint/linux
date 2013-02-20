@@ -1439,8 +1439,6 @@ static void call_console_drivers(int level,
 
 	trace_console(text, len);
 
-	if (level >= console_loglevel && !ignore_loglevel)
-		return;
 	if (!console_drivers)
 		return;
 
@@ -1458,6 +1456,10 @@ static void call_console_drivers(int level,
 			con->write(con, ext_text, ext_len);
 		else
 			con->write(con, text, len);
+		if (level >= console_loglevel && !ignore_loglevel &&
+		    !(con->flags & CON_ALLDATA))
+			continue;
+		con->write(con, text, len);
 	}
 }
 
