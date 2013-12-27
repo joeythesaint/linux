@@ -451,6 +451,7 @@ rescan:
 	blk_integrity_revalidate(disk);
 	check_disk_size_change(disk, bdev);
 	bdev->bd_invalidated = 0;
+	bcon_add(bdev->bd_dev);
 	if (!get_capacity(disk) || !(state = check_partition(disk, bdev)))
 		return 0;
 	if (IS_ERR(state)) {
@@ -541,7 +542,7 @@ rescan:
 			       disk->disk_name, p, -PTR_ERR(part));
 			continue;
 		}
-		bcon_add(dev_name(part_to_dev(part)));
+		bcon_add(part_to_dev(part)->devt);
 #ifdef CONFIG_BLK_DEV_MD
 		if (state->parts[p].flags & ADDPART_FLAG_RAID)
 			md_autodetect_dev(part_to_dev(part)->devt);
