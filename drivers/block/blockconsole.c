@@ -62,19 +62,21 @@
 #include <linux/bio.h>
 #include <linux/blockconsole.h>
 #include <linux/console.h>
+#include <linux/ctype.h>
+#include <linux/device.h>
 #include <linux/fs.h>
+#include <linux/genhd.h>
 #include <linux/kref.h>
 #include <linux/kthread.h>
 #include <linux/mm.h>
+#include <linux/module.h>
 #include <linux/mount.h>
 #include <linux/random.h>
+#include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/workqueue.h>
-#include <linux/sched.h>
-#include <linux/ctype.h>
-#include <linux/device.h>
-#include <linux/genhd.h>
+#include <linux/version.h>
 
 #define BLOCKCONSOLE_MAGIC	"\nLinux blockconsole version 1.1\n"
 #define BCON_UUID_OFS		(32)
@@ -218,7 +220,7 @@ static void bcon_advance_console_bytes(struct blockconsole *bc, int bytes)
 	} while (atomic64_cmpxchg(&bc->console_bytes, old, new) != old);
 }
 
-static void request_complete(struct bio *bio, int err)
+static void request_complete(struct bio *bio)
 {
 	complete((struct completion *)bio->bi_private);
 }
@@ -235,17 +237,22 @@ static int sync_read(struct blockconsole *bc, u64 ofs)
 	bio_vec.bv_len = SECTOR_SIZE;
 	bio_vec.bv_offset = 0;
 	bio.bi_vcnt = 1;
-	bio.bi_idx = 0;
-	bio.bi_size = SECTOR_SIZE;
+	bio.bi_iter.bi_idx = 0;
+	bio.bi_iter.bi_size = SECTOR_SIZE;
 	bio.bi_bdev = bc->bdev;
-	bio.bi_sector = ofs >> SECTOR_SHIFT;
+	bio.bi_iter.bi_sector = ofs >> SECTOR_SHIFT;
 	init_completion(&complete);
 	bio.bi_private = &complete;
 	bio.bi_end_io = request_complete;
+#if LINUX_VERSION_CODE > KERNEL_VERSION(4,7,0)
+	bio.bi_opf |= READ;
 
+	submit_bio(&bio);
+#else
 	submit_bio(READ, &bio);
+#endif
 	wait_for_completion(&complete);
-	return test_bit(BIO_UPTODATE, &bio.bi_flags) ? 0 : -EIO;
+	return -(bio.bi_error);
 }
 
 static void bcon_erase_segment(struct blockconsole *bc)
@@ -266,15 +273,20 @@ static void bcon_erase_segment(struct blockconsole *bc)
 		bio_init(bio);
 		bio->bi_io_vec = &bcon_bio->bvec;
 		bio->bi_vcnt = 1;
-		bio->bi_size = PAGE_SIZE;
+		bio->bi_iter.bi_size = PAGE_SIZE;
 		bio->bi_bdev = bc->bdev;
 		bio->bi_private = bc;
-		bio->bi_idx = 0;
-		bio->bi_sector = (bc->write_bytes + i * PAGE_SIZE) >> 9;
+		bio->bi_iter.bi_idx = 0;
+		bio->bi_iter.bi_sector = (bc->write_bytes + i * PAGE_SIZE) >> 9;
 		bcon_bio->in_flight = 1;
 		wmb();
 		/* We want the erase to go to the device first somehow */
+#if LINUX_VERSION_CODE > KERNEL_VERSION(4,7,0)
+		bio->bi_opf |= (WRITE | REQ_SOFTBARRIER);
+		submit_bio(bio);
+#else
 		submit_bio(WRITE | REQ_SOFTBARRIER, bio);
+#endif
 	}
 }
 
@@ -380,7 +392,7 @@ static void bcon_unregister(struct work_struct *work)
 }
 
 #define BCON_MAX_ERRORS	10
-static void bcon_end_io(struct bio *bio, int err)
+static void bcon_end_io(struct bio *bio)
 {
 	struct bcon_bio *bcon_bio = container_of(bio, struct bcon_bio, bio);
 	struct blockconsole *bc = bio->bi_private;
@@ -394,7 +406,7 @@ static void bcon_end_io(struct bio *bio, int err)
 	 * the limit yet, so we don't bcon_put() twice from here.
 	 */
 	spin_lock_irqsave(&bc->end_io_lock, flags);
-	if (err) {
+	if (bio->bi_error) {
 		if (bc->error_count++ == BCON_MAX_ERRORS) {
 			pr_info("no longer logging to %s\n", bc->devname);
 			schedule_work(&bc->unregister_work);
@@ -426,16 +438,21 @@ static void bcon_writesector(struct blockconsole *bc, int index)
 	bio_init(bio);
 	bio->bi_io_vec = &bcon_bio->bvec;
 	bio->bi_vcnt = 1;
-	bio->bi_size = SECTOR_SIZE;
+	bio->bi_iter.bi_size = SECTOR_SIZE;
 	bio->bi_bdev = bc->bdev;
 	bio->bi_private = bc;
 	bio->bi_end_io = bcon_end_io;
 
-	bio->bi_idx = 0;
-	bio->bi_sector = bc->write_bytes >> 9;
+	bio->bi_iter.bi_idx = 0;
+	bio->bi_iter.bi_sector = bc->write_bytes >> 9;
 	bcon_bio->in_flight = 1;
 	wmb();
+#if LINUX_VERSION_CODE > KERNEL_VERSION(4,7,0)
+	bio->bi_opf |= WRITE;
+	submit_bio(bio);
+#else
 	submit_bio(WRITE, bio);
+#endif
 }
 
 /**
