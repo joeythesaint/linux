@@ -653,7 +653,7 @@ void bcon_add(dev_t devt)
 {
 	struct bcon_candidate *cand;
 
-	cand = kmalloc(sizeof(cand), GFP_KERNEL);
+	cand = kzalloc(sizeof(*cand), GFP_KERNEL);
 	if (!cand)
 		return;
 	cand->devt = devt;
